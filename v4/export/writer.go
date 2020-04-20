@@ -56,7 +56,7 @@ func (f *SimpleWriter) WriteTableData(ctx context.Context, ir TableDataIR) error
 
 	for {
 		filePath := path.Join(f.cfg.OutputDirPath, fileName)
-		fileWriter, tearDown := buildInterceptFileWriter(filePath)
+		fileWriter, tearDown := buildInterceptFileWriter(filePath, f.cfg.FileSize)
 		err := WriteInsert(chunksIter, fileWriter)
 		tearDown()
 		if err != nil {
@@ -122,7 +122,7 @@ func (f *CsvWriter) WriteTableData(ctx context.Context, ir TableDataIR) error {
 
 	for {
 		filePath := path.Join(f.cfg.OutputDirPath, fileName)
-		fileWriter, tearDown := buildInterceptFileWriter(filePath)
+		fileWriter, tearDown := buildInterceptFileWriter(filePath, 524288000)
 		err := WriteInsertInCsv(chunksIter, fileWriter, f.cfg.NoHeader, f.cfg.CsvNullValue)
 		tearDown()
 		if err != nil {

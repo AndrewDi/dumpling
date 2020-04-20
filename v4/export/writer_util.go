@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/pingcap/dumpling/v4/log"
 	"go.uber.org/zap"
@@ -317,19 +318,30 @@ func buildFileWriter(path string) (io.StringWriter, func(), error) {
 	return buf, tearDownRoutine, nil
 }
 
-func buildInterceptFileWriter(path string) (io.Writer, func()) {
+func buildInterceptFileWriter(path string, filesize uint64) (io.Writer, func()) {
 	var file *os.File
+	var data []byte
 	fileWriter := &InterceptFileWriter{}
 	initRoutine := func() error {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0755)
 		file = f
 		if err != nil {
 			log.Error("open file failed",
 				zap.String("path", path),
 				zap.Error(err))
 		}
+		if _, err := f.WriteAt([]byte{byte(0)}, int64(filesize<<8)); nil != err {
+			log.Error("extend file failed", zap.Error(err))
+		}
+		data, err = syscall.Mmap(int(f.Fd()), 0, int(filesize<<8), syscall.PROT_WRITE, syscall.MAP_SHARED)
+		if err != nil {
+			log.Error("open mmap file failed",
+				zap.String("path", path),
+				zap.Error(err))
+		}
 		log.Debug("opened file", zap.String("path", path))
-		fileWriter.Writer = file
+		fileWriter.FileData = data
+		fileWriter.FileIndex = 0
 		return err
 	}
 	fileWriter.initRoutine = initRoutine
@@ -339,6 +351,7 @@ func buildInterceptFileWriter(path string) (io.Writer, func()) {
 			return
 		}
 		log.Debug("tear down lazy file writer...")
+		syscall.Munmap(data)
 		err := file.Close()
 		if err == nil {
 			return
@@ -366,7 +379,8 @@ func (l *LazyStringWriter) WriteString(str string) (int, error) {
 // InterceptFileWriter is an interceptor of os.File,
 // tracking whether a StringWriter has written something.
 type InterceptFileWriter struct {
-	io.Writer
+	FileData  []byte
+	FileIndex int
 	sync.Once
 	initRoutine func() error
 	err         error
@@ -382,7 +396,10 @@ func (w *InterceptFileWriter) Write(p []byte) (int, error) {
 	if w.err != nil {
 		return 0, fmt.Errorf("open file error: %s", w.err.Error())
 	}
-	return w.Writer.Write(p)
+	for i, v := range p {
+		w.FileData[w.FileIndex+i] = v
+	}
+	return w.FileIndex, nil
 }
 
 func wrapBackTicks(identifier string) string {
